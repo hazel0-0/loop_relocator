@@ -1,0 +1,37 @@
+<launch>
+<!-- Launch file for Place recognition example -->
+
+  <arg name="rviz" default="true" />
+  <arg name="seq_key" default="outdoor_share" /> 
+  <arg name="date_file_path" default="$(find loop_relocator)/data/$(arg seq_key)" />  <!-- added by ym -->
+  <node 
+		pkg="loop_relocator" 
+		type="place_recognition_node" 
+		name="place_recognition_node" 
+		output="screen" 
+	/>
+  <!-- for btc -->
+  <rosparam command="load" file="$(find loop_relocator)/config/general_config.yaml" />
+  <!-- <param name="cloud_overlap_thr" type="double" value = "0.5"/>
+  <param name="read_bin" type="bool" value="false" />
+  <param name="setting_path" type="string" value = "$(find loop_relocator)/config/$(arg seq_key).yaml"/> -->
+
+  <!-- <param name="pcds_dir" type="string" value = "$(arg date_file_path)/PCD"/>
+  <param name="pose_file" type="string" value = "$(arg date_file_path)/optimized_pose.txt"/> -->
+  
+  <!-- <param name="pcds_dir" type="string" value = "$(arg date_file_path)/PCD_fast_lio"/>
+  <param name="pose_file" type="string" value = "$(arg date_file_path)/odom.txt"/> -->
+  <!-- added by ym -->
+ <!-- <param name="curr_pcds_dir" type="string" value = "/home/haz/nav/src/SimpsonDiff/FAST_LIO/PCD"/>
+  <param name="curr_pose_file" type="string" value = "/home/haz/nav/src/SimpsonDiff/FAST_LIO/PCD/odom_poses.txt"/> -->
+  <!-- <param name="btc_save_dir" type="string" value="$(arg date_file_path)"/> -->
+  <param name="seq_key" type="string" value="$(arg seq_key)"/>
+  <!-- for submap_match -->
+  <param name="full_pcd_dir" type="string" value = "$(arg date_file_path)/$(arg seq_key).pcd"/>
+  <!-- <param name="full_pcd_dir" type="string" value = "/home/haz/nav/src/SimpsonDiff/model_gazebo/world/global_map_full.pcd"/> -->
+  
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz_loop" args="-d $(find loop_relocator)/rviz_cfg/loop.rviz" />
+  </group>
+
+</launch>

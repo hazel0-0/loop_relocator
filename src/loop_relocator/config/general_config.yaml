@@ -1,0 +1,20 @@
+lidar_imu_trans:
+  x: 0.367
+  y: 0.0475
+  z: 0.065
+  # x:  0.013
+  # y: -0.0475
+  # z: -0.065
+  # x: 0.0
+  # y: 0.0
+  # z: 0.0
+RTK_imu_trans:
+  x: 0.39
+  y: 0.0
+  z: 0.0
+latitude: 30.2643729107
+longitude: 120.2964856003
+altitude: 0.0
+geocentric_x: 239883.936240
+geocentric_y: 3351122.307560
+geocentric_z: 21.903999

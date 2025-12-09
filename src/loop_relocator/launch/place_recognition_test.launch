@@ -1,0 +1,31 @@
+<launch>
+<!-- Launch file for Place recognition example -->
+
+  <arg name="rviz" default="true" />
+  <arg name="seq_key" default="outdoor2" /> 
+  <arg name="date_file_path" default="$(find btc_desc)/data/$(arg seq_key)" />  <!-- added by ym -->
+  <node 
+		pkg="btc_desc" 
+		type="place_recognition_test" 
+		name="place_recognition_test" 
+		output="screen" 
+	/>
+<rosparam command="load" file="$(find btc_desc)/config/general_config.yaml" />
+  <param name="cloud_overlap_thr" type="double" value = "0.5"/>
+  <param name="read_bin" type="bool" value="false" />
+  <param name="setting_path" type="string" value = "$(find btc_desc)/config/$(arg seq_key).yaml"/>
+  <param name="pcds_dir" type="string" value = "$(arg date_file_path)/PCD"/>
+  <param name="pose_file" type="string" value = "$(arg date_file_path)/optimized_pose.txt"/>
+  <param name="full_pcd_dir" type="string" value = "$(arg date_file_path)/$(arg seq_key).pcd"/>
+  <!-- <param name="pcds_dir" type="string" value = "$(arg date_file_path)/PCD_fast_lio"/>
+  <param name="pose_file" type="string" value = "$(arg date_file_path)/odom.txt"/> -->
+  <!-- added by ym -->
+ <!-- <param name="curr_pcds_dir" type="string" value = "/home/haz/nav/src/SimpsonDiff/FAST_LIO/PCD"/>
+  <param name="curr_pose_file" type="string" value = "/home/haz/nav/src/SimpsonDiff/FAST_LIO/PCD/odom_poses.txt"/> -->
+  <param name="btc_save_dir" type="string" value="$(arg date_file_path)"/>
+  <param name="seq_key" type="string" value="$(arg seq_key)"/>
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find btc_desc)/rviz_cfg/loop.rviz" />
+  </group>
+
+</launch>

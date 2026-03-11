@@ -1,0 +1,65 @@
+<launch>
+  <!--
+    QR 测试与可视化 Launch File
+    用途:
+      1. place_recognition_node 以 test_mode 运行 —— 反推二维码世界坐标、键盘保存标定
+      2. qr_target_visualizer —— 静态显示已知 QR / 充电桩角点
+    适用场景: 标定二维码位置、检查可视化效果
+  -->
+
+  <!-- ═══ 共用路径 ════════════════════════════════════════════════════════ -->
+  <arg name="general_config"   default="$(find loop_relocator)/config/general_config.yaml" />
+  <arg name="qr_config_file"   default="$(find loop_relocator)/config/qr_config.yaml" />
+
+  <!-- ═══ 可视化 ══════════════════════════════════════════════════════════ -->
+  <arg name="visualization_frame_id"  default="base" />
+  <arg name="viz_rate"                default="1.0" />
+  <arg name="rviz"                    default="true" />
+
+  <!-- ═══ 地图文件 (ICP 用) ═══════════════════════════════════════════════ -->
+  <arg name="seq_key"          default="outdoor_share" />
+  <arg name="data_path"        default="$(find loop_relocator)/data" />
+
+  <!-- ═══ 定位源开关 (测试模式下一般只开 QR) ═════════════════════════════ -->
+  <arg name="manual_loop_enable"  default="false" />
+  <arg name="rtk_loop_enable"     default="false" />
+  <arg name="qr_loop_enable"      default="true" />
+  <arg name="qr_test_mode"        default="true" />
+
+  <!-- ═══ 全局参数 ════════════════════════════════════════════════════════ -->
+  <rosparam command="load" file="$(arg general_config)" />
+
+  <!-- 用 launch arg 覆盖 YAML 中的值，方便一键切换 -->
+  <param name="manual_loop/enable"  value="$(arg manual_loop_enable)" />
+  <param name="rtk_loop/enable"     value="$(arg rtk_loop_enable)" />
+  <param name="qr_loop/enable"      value="$(arg qr_loop_enable)" />
+  <param name="qr_loop/test_mode"   value="$(arg qr_test_mode)" />
+  <param name="full_pcd_dir"        value="$(arg data_path)/$(arg seq_key).pcd" />
+
+  <!-- ═══ place_recognition_node (QR test mode) ══════════════════════════ -->
+  <node pkg="loop_relocator"
+        type="place_recognition_node"
+        name="place_recognition_node"
+        output="screen">
+    <param name="qr_config_file"  value="$(arg qr_config_file)" />
+  </node>
+
+  <!-- ═══ qr_target_visualizer (静态标记可视化) ══════════════════════════ -->
+  <node pkg="loop_relocator"
+        type="qr_target_visualizer"
+        name="qr_target_visualizer"
+        output="screen">
+    <param name="config_file"              value="$(arg qr_config_file)" />
+    <param name="visualization_frame_id"   value="$(arg visualization_frame_id)" />
+    <param name="publish_rate"             value="$(arg viz_rate)" />
+  </node>
+
+  <!-- ═══ RViz ════════════════════════════════════════════════════════════ -->
+  <group if="$(arg rviz)">
+    <node pkg="rviz" type="rviz" name="rviz"
+          args="-d $(find loop_relocator)/rviz_cfg/qr_targets.rviz"
+          launch-prefix="nice"
+          required="false" />
+  </group>
+
+</launch>

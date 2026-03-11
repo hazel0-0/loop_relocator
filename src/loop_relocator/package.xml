@@ -71,6 +71,8 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf_conversions</exec_depend>
+  <depend>tf2_ros</depend>
+  <depend>Aruco_detection</depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

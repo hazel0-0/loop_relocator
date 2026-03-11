@@ -89,7 +89,7 @@ class IKD_MATCH
         double epsilon);
     bool cloud_matching(
         const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud2,
-        std::pair<Eigen::Vector3d, Eigen::Matrix3d>& transform,  // 位姿增量
+        std::pair<Eigen::Vector3d, Eigen::Matrix3d> transform,  // 位姿增量
         std::pair<Eigen::Vector3d, Eigen::Matrix3d>& loop_transform// 待优化的T_loop
         );
     std::pair<Eigen::Vector3d, Eigen::Matrix3d> cloud_matching(const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud1,

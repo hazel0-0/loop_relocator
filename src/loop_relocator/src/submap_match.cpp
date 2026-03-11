@@ -668,7 +668,7 @@ void IKD_MATCH::optimizeLoopTransform(
         }
         
         effct_feat_num = world_point_seq.size();
-        ROS_WARN_STREAM("Effective Feature Number: " << effct_feat_num);
+        // ROS_WARN_STREAM("Effective Feature Number: " << effct_feat_num);
         if(effct_feat_num < 1)
         {
             // 没有找到足够的匹配平面，优化失败
@@ -758,8 +758,8 @@ void IKD_MATCH::optimizeLoopTransform(
             ptinworld.z = ptt(2);
             laserScan_purtubation.push_back(ptinworld);
         }
-        ROS_WARN_STREAM("isconverge: " << isconverge);
-        ROS_WARN_STREAM("iter_conter: " << iter_conter);
+        // ROS_WARN_STREAM("isconverge: " << isconverge);
+        // ROS_WARN_STREAM("iter_conter: " << iter_conter);
         
         iter_conter++;
     }
@@ -848,7 +848,7 @@ void IKD_MATCH::cloud_matching_init(std::string pcd_file)
 }
 bool IKD_MATCH::cloud_matching(
     const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud2,
-    std::pair<Eigen::Vector3d, Eigen::Matrix3d>& transform,  // 位姿增量
+    std::pair<Eigen::Vector3d, Eigen::Matrix3d> transform,  // 位姿增量
     std::pair<Eigen::Vector3d, Eigen::Matrix3d>& loop_transform// 待优化的T_loop
     )
 {

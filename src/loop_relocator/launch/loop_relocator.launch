@@ -1,37 +1,58 @@
 <launch>
-<!-- Launch file for Place recognition example -->
+  <!--
+    Loop Relocator 生产 Launch File
+    用途: 正常运行回环重定位 (manual / RTK / QR)
+    所有定位源的 enable 和 options 可通过 arg 覆盖，方便快速切换
+  -->
 
-  <arg name="rviz" default="true" />
-  <arg name="seq_key" default="outdoor_share" /> 
-  <arg name="date_file_path" default="$(find loop_relocator)/data/$(arg seq_key)" />  <!-- added by ym -->
-  <node 
-		pkg="loop_relocator" 
-		type="place_recognition_node" 
-		name="place_recognition_node" 
-		output="screen" 
-	/>
-  <!-- for btc -->
-  <rosparam command="load" file="$(find loop_relocator)/config/general_config.yaml" />
-  <!-- <param name="cloud_overlap_thr" type="double" value = "0.5"/>
-  <param name="read_bin" type="bool" value="false" />
-  <param name="setting_path" type="string" value = "$(find loop_relocator)/config/$(arg seq_key).yaml"/> -->
+  <!-- ═══ 共用路径 ════════════════════════════════════════════════════════ -->
+  <arg name="general_config"   default="$(find loop_relocator)/config/general_config.yaml" />
+  <arg name="qr_config_file"   default="$(find loop_relocator)/config/qr_config.yaml" />
 
-  <!-- <param name="pcds_dir" type="string" value = "$(arg date_file_path)/PCD"/>
-  <param name="pose_file" type="string" value = "$(arg date_file_path)/optimized_pose.txt"/> -->
-  
-  <!-- <param name="pcds_dir" type="string" value = "$(arg date_file_path)/PCD_fast_lio"/>
-  <param name="pose_file" type="string" value = "$(arg date_file_path)/odom.txt"/> -->
-  <!-- added by ym -->
- <!-- <param name="curr_pcds_dir" type="string" value = "/home/haz/nav/src/SimpsonDiff/FAST_LIO/PCD"/>
-  <param name="curr_pose_file" type="string" value = "/home/haz/nav/src/SimpsonDiff/FAST_LIO/PCD/odom_poses.txt"/> -->
-  <!-- <param name="btc_save_dir" type="string" value="$(arg date_file_path)"/> -->
-  <param name="seq_key" type="string" value="$(arg seq_key)"/>
-  <!-- for submap_match -->
-  <param name="full_pcd_dir" type="string" value = "$(arg date_file_path)/$(arg seq_key).pcd"/>
-  <!-- <param name="full_pcd_dir" type="string" value = "/home/haz/nav/src/SimpsonDiff/model_gazebo/world/global_map_full.pcd"/> -->
-  
+  <!-- ═══ 地图 / 数据 ════════════════════════════════════════════════════ -->
+  <arg name="seq_key"          default="outdoor_share" />
+  <arg name="data_path"        default="$(find loop_relocator)/data" />
+
+  <!-- ═══ 定位源开关 ═════════════════════════════════════════════════════ -->
+  <arg name="manual_loop_enable"  default="true" />
+  <arg name="rtk_loop_enable"     default="true" />
+  <arg name="qr_loop_enable"      default="true" />
+
+  <!-- ═══ RTK 节流参数 ═══════════════════════════════════════════════════ -->
+  <arg name="rtk_skip_threshold"  default="1" />
+  <arg name="rtk_min_interval"    default="0.1" />
+
+  <!-- ═══ RViz ════════════════════════════════════════════════════════════ -->
+  <arg name="rviz"  default="true" />
+
+  <!-- ═══ 全局参数 ════════════════════════════════════════════════════════ -->
+  <rosparam command="load" file="$(arg general_config)" />
+
+  <!-- 用 launch arg 覆盖 YAML 默认值 -->
+  <param name="manual_loop/enable"  value="$(arg manual_loop_enable)" />
+  <param name="rtk_loop/enable"     value="$(arg rtk_loop_enable)" />
+  <param name="qr_loop/enable"      value="$(arg qr_loop_enable)" />
+  <param name="qr_loop/test_mode"   value="false" />
+
+  <param name="rtk_skip_threshold"  type="int"    value="$(arg rtk_skip_threshold)" />
+  <param name="rtk_min_interval"    type="double"  value="$(arg rtk_min_interval)" />
+
+  <param name="seq_key"       type="string"  value="$(arg seq_key)" />
+  <param name="full_pcd_dir"  type="string"  value="$(arg data_path)/$(arg seq_key).pcd" />
+
+  <!-- ═══ place_recognition_node ═════════════════════════════════════════ -->
+  <node pkg="loop_relocator"
+        type="place_recognition_node"
+        name="place_recognition_node"
+        output="screen">
+    <param name="qr_config_file"  value="$(arg qr_config_file)" />
+  </node>
+
+  <!-- ═══ RViz (默认关闭) ════════════════════════════════════════════════ -->
   <group if="$(arg rviz)">
-    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz_loop" args="-d $(find loop_relocator)/rviz_cfg/loop.rviz" />
+    <node launch-prefix="nice"
+          pkg="rviz" type="rviz" name="rviz"
+          args="-d $(find loop_relocator)/rviz_cfg/loop.rviz" />
   </group>
 
 </launch>

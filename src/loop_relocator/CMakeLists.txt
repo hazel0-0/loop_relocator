@@ -14,6 +14,7 @@ SET(CMAKE_BUILD_TYPE "Release")
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   cv_bridge
+  carstatemsgs
   pcl_conversions
   message_filters
   pcl_ros
@@ -22,7 +23,8 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   std_msgs
   tf_conversions
-  carstatemsgs
+  tf2_ros
+  Aruco_detection
 )
 find_package (GeographicLib REQUIRED)
 
@@ -31,6 +33,9 @@ find_package (GeographicLib REQUIRED)
 find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Threads)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
+find_package(Eigen3 REQUIRED)
 # find_package(Ceres REQUIRED)
 # find_package(GTSAM REQUIRED QUIET)
 
@@ -49,6 +54,8 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${GeographicLib_INCLUDE_DIRS}
+  ${YAML_CPP_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIRS}
 )
 
 add_library(utils_lib src/utils.cpp)
@@ -62,15 +69,23 @@ add_library(utils_lib src/utils.cpp)
 #         ${CERES_LIBRARIES} 
 #         tbb
 #         utils_lib)
-add_executable(place_recognition_node src/place_recognition_node.cpp include/ikd-Tree/ikd_Tree.cpp src/submap_match.cpp)
+add_executable(place_recognition_node src/place_recognition_node.cpp include/ikd-Tree/ikd_Tree.cpp src/submap_match.cpp src/RTK/rtk_relocator.cpp src/QR_code/qr_relocator.cpp)
 target_link_libraries(place_recognition_node 
         ${catkin_LIBRARIES} 
         ${PCL_LIBRARIES} 
         ${OpenCV_LIBS} 
         ${CERES_LIBRARIES} 
         ${GeographicLib_LIBRARIES}
+        ${YAML_CPP_LIBRARIES}
         # tbb
         utils_lib
         )
+
+# ── QR Target Visualizer ──────────────────────────────────────────────────────
+add_executable(qr_target_visualizer
+        src/QR_code/qr_target_visualizer.cpp)
+target_link_libraries(qr_target_visualizer
+        ${catkin_LIBRARIES}
+        ${YAML_CPP_LIBRARIES})
               
       

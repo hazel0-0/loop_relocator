@@ -1,4 +1,6 @@
 #include "place_recognition.hpp"
+#include "RTK/rtk_relocator.hpp"
+#include "QR_code/qr_relocator.hpp"
 #include <pcl/point_types.h>  // 确保包含必要的头文件
 #include <pcl/point_cloud.h>
 #include <message_filters/subscriber.h>
@@ -19,6 +21,9 @@ PlaceRecognition::PlaceRecognition(ros::NodeHandle &nh) : ikd_match_mtx()
   // nh.param<std::string>("seq_key", seq_key, "");
   // nh.param<bool>("read_bin", read_bin, true);
   nh.param<std::string>("full_pcd_dir", full_pcd_dir, "");
+  
+  // 读取可视化 frame_id 参数
+  nh.param<std::string>("visualization_frame_id", visualization_frame_id, "base");
 
   double x, y, z;
   nh.param<double>("lidar_imu_trans/x", x, 0.0);
@@ -27,38 +32,6 @@ PlaceRecognition::PlaceRecognition(ros::NodeHandle &nh) : ikd_match_mtx()
   lidar_imu_trans << x, y, z;
   
   std::cout << "lidar_imu_trans: " << lidar_imu_trans.transpose() << std::endl;
-  
-  nh.param<double>("RTK_imu_trans/x", x, 0.0);
-  nh.param<double>("RTK_imu_trans/y", y, 0.0);
-  nh.param<double>("RTK_imu_trans/z", z, 0.0);
-  RTK_imu_trans << x, y, z;
-  std::cout << "RTK_imu_trans: " << RTK_imu_trans.transpose() << std::endl;
- 
-  nh.param<double>("latitude", latitude, 0.0);
-  nh.param<double>("longitude", longitude, 0.0);
-  nh.param<double>("altitude", altitude, 0.0);
-  std::cout << "latitude: " << latitude << std::endl;
-  std::cout << "longitude: " << longitude << std::endl;
-  std::cout << "altitude: " << altitude << std::endl;
-  nh.param<double>("geocentric_x", geocentric_x, 0.0);
-  nh.param<double>("geocentric_y", geocentric_y, 0.0);
-  nh.param<double>("geocentric_z", geocentric_z, 0.0);
-
-  // color_tp.a = 1.0;
-  // color_tp.r = 0.0 / 255.0;
-  // color_tp.g = 255.0 / 255.0;
-  // color_tp.b = 0.0 / 255.0;
-
-  // color_fp.a = 1.0;
-  // color_fp.r = 1.0;
-  // color_fp.g = 0.0;
-  // color_fp.b = 0.0;
-
-  // color_path.a = 0.8;
-  // color_path.r = 255.0 / 255.0;
-  // color_path.g = 255.0 / 255.0;
-  // color_path.b = 255.0 / 255.0;
-
 
 
 
@@ -103,6 +76,8 @@ PlaceRecognition::PlaceRecognition(ros::NodeHandle &nh) : ikd_match_mtx()
   
   pubLoopTransform = 
         nh.advertise<geometry_msgs::PoseStamped>("/loop_transform", 10);
+  pubMapLocalization = 
+        nh.advertise<geometry_msgs::PoseStamped>("/map_localization", 10);
     
     
     // load_config_setting(setting_path, config_setting);
@@ -117,19 +92,40 @@ PlaceRecognition::PlaceRecognition(ros::NodeHandle &nh) : ikd_match_mtx()
     // geo_converter.Reset(lat, lon, alt);
     // altitude = alt;
 
-    GeographicLib::UTMUPS::Forward(latitude, longitude, zone, northp, utm_x_0, utm_y_0);
-    std::cout<< "latitude:"<< latitude << " longitude:" << longitude << " utm_x_0:" <<utm_x_0 <<" utm_y_0:" <<utm_y_0 <<std::endl;
-    std::cout << "自动计算的带号: " << zone << std::endl;
+    // ── 读取三种定位源的开关与 options ──────────────────────────────────
+    auto loadLoopOptions = [&](const std::string &prefix,
+                               bool &enable_out,
+                               std::vector<bool> &opts_out,
+                               bool default_icp, bool default_sw, bool default_viz)
+    {
+        nh.param<bool>(prefix + "/enable",         enable_out,  true);
+        bool icp, sw, viz;
+        nh.param<bool>(prefix + "/icp_refine",     icp,  default_icp);
+        nh.param<bool>(prefix + "/sliding_window", sw,   default_sw);
+        nh.param<bool>(prefix + "/visualize",      viz,  default_viz);
+        opts_out = {icp, sw, viz};
+        ROS_INFO("%s: enable=%d, icp=%d, sliding_window=%d, visualize=%d",
+                 prefix.c_str(), enable_out, icp, sw, viz);
+    };
 
-    // 创建消息同步器
-    rtk_odom_sub_.subscribe(nh, "/gps/euler", 10);
-    rtk_fix_sub_.subscribe(nh, "/gps/fix", 10);
-    sync_.reset(new Sync(SyncPolicy(10), rtk_odom_sub_, rtk_fix_sub_));
-    sync_->registerCallback(boost::bind(&PlaceRecognition::RTKPoseCallback, this, _1, _2));
-    //for raw_date
-    //rtk_covariance_sub_= nh.subscribe("/rtk_agent/navsatfix", 10, &PlaceRecognition::RTKPoseCallback, this);
+    loadLoopOptions("manual_loop", manual_loop_enable, manual_loop_options,
+                    true, false, true);
+    loadLoopOptions("rtk_loop",    rtk_loop_enable,    rtk_loop_options,
+                    true, true, true);
+    loadLoopOptions("qr_loop",     qr_loop_enable,     qr_loop_options,
+                    true, true, true);
+
+    // 初始化 RTK 重定位模块（仅在启用时创建）
+    if (rtk_loop_enable)
+        rtk_relocator_ = std::make_unique<RtkRelocator>(nh, this);
+
+    // 初始化 QR 重定位模块（仅在启用时创建）
+    if (qr_loop_enable)
+        qr_relocator_ = std::make_unique<QrRelocator>(nh, this);
+
     // 初始化同步器
-
+    last_loop_transform.first = Eigen::Vector3d::Zero();
+    last_loop_transform.second = Eigen::Matrix3d::Identity();
 }
 //for test only
 void PlaceRecognition::car_odom_callback(const carstatemsgs::CarState::ConstPtr &msg)
@@ -227,125 +223,90 @@ std::pair<Eigen::Vector3d, Eigen::Matrix3d> PlaceRecognition::computeFilteredAve
   return {filtered_trans_mean, q_mean.toRotationMatrix()};
 }
 
-void PlaceRecognition::search_and_pub_loop(std::pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform, 
-  pcl::PointCloud<pcl::PointXYZI> transform_cloud, std::pair<Eigen::Vector3d, Eigen::Matrix3d> current_pose_){
-  std::cout << "current_cloud size3: " << transform_cloud.size() << std::endl;
-  ros::Rate slow_loop(1000);
-  std::mutex mtx;
-  std::unique_lock<std::mutex> lock(mtx);
-  std::pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform_raw;
-  loop_transform_raw.first = loop_transform.first;
-  loop_transform_raw.second = loop_transform.second;
-  sensor_msgs::PointCloud2 pub_cloud;
-  pcl::PointCloud<pcl::PointXYZI> transformed_cloud_raw;
-  transformed_cloud_raw.resize(transform_cloud.size());
-  
-  for (size_t i = 0; i < transform_cloud.size(); i++) {
-    Eigen::Vector3d pv = point2vec(transform_cloud.points[i]);
-    pv = loop_transform.second * pv + loop_transform.first;
-    transformed_cloud_raw.points[i] = vec2point(pv);
-    transformed_cloud_raw.points[i].intensity = 100;
-  }
-  pcl::toROSMsg(transformed_cloud_raw, pub_cloud);
-  pub_cloud.header.frame_id = "base";
-  pubRawTransformedCloud.publish(pub_cloud);
-  bool if_converged;   
+bool PlaceRecognition::checkSlidingWindowConsistency(
+    const std::pair<Eigen::Vector3d, Eigen::Matrix3d> &loop_transform,
+    size_t window_size,
+    double filter_threshold,
+    int similarity_count,
+    double trans_threshold,
+    double angle_threshold)
+{
+    addTransform(window, loop_transform, window_size);
 
-  {
-    std::lock_guard<std::mutex> lock_guard(ikd_match_mtx);
-    // ikd_match->cloud_matching( btc_manager->key_cloud_vec_[search_result.first],
-    //   transform_cloud.makeShared(),
-    //   pose_list[submap_id],
-    //   loop_transform);
-    if_converged = ikd_match->cloud_matching(transform_cloud.makeShared(), current_pose_, loop_transform);
-    
-    std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!loop transform: " << loop_transform.first.transpose() << std::endl;
-  }
-  bool is_true_loop = false;
-  //for test only
-  // if (mannul_init_flag)
-  // {
-  //   is_true_loop = true;
-  //   mannul_init_flag = false;
-  //   //
-  // }
-  if(if_converged)
-  {
-    if (mannul_init_flag)
-    {
-      is_true_loop = true;
-      mannul_init_flag = false;
-      //
-    }else if(RTK_init_flag)
-    {
-      RTK_init_flag = false;
-      //std::cout << "loop transform norm: " << loop_transform.first.norm() << std::endl;
-      
-      addTransform(window, loop_transform, 5);  // 窗口大小=5
-      
-      // 计算滤波后的平均值
-      auto loop_transform = computeFilteredAverage(window, 0.1);  // 阈值=0.1
-      loop_transforms.push_back(loop_transform);
-      int similarity_count = 3;
-      const double trans_threshold = 0.06;  // 平移变化阈值（米）
-      const double angle_threshold = 2.0;  // 旋转变化阈值（度）
-      std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!loop transform: " << loop_transform.first.transpose()
-      << std::endl;
-      if (loop_transforms.size() >= similarity_count) {
-          
-          for (int i = 1; i < similarity_count; i++) {
-              const auto& prev = loop_transforms[loop_transforms.size() - i - 1];
-              const auto& curr = loop_transforms[loop_transforms.size() - i];
-              
-              // 检查平移变化
-              double delta_trans = (curr.first - prev.first).norm();
-              if (delta_trans > trans_threshold) {
-                  break;
-              }
-              
-              // 检查旋转变化（将旋转矩阵转换为角度差）
-              Eigen::AngleAxisd angle_axis(curr.second * prev.second.transpose());
-              double delta_angle = angle_axis.angle() * 180.0 / M_PI;
-              if (delta_angle > angle_threshold) {
-                  break;
-              }
+    auto filtered_tf = computeFilteredAverage(window, filter_threshold);
+    loop_transforms.push_back(filtered_tf);
 
-            // if ((cloud_overlap >= cloud_overlap_thr))
-            // {
-              is_true_loop = true;
-            //}
-          }
-          
-          
-      }
+    std::cout << "sliding window loop transform: " << filtered_tf.first.transpose() << std::endl;
 
+    if (static_cast<int>(loop_transforms.size()) < similarity_count)
+        return false;
+
+    for (int i = 1; i < similarity_count; i++) {
+        const auto& prev = loop_transforms[loop_transforms.size() - i - 1];
+        const auto& curr = loop_transforms[loop_transforms.size() - i];
+
+        double delta_trans = (curr.first - prev.first).norm();
+        if (delta_trans > trans_threshold)
+            return false;
+
+        Eigen::AngleAxisd angle_axis(curr.second * prev.second.transpose());
+        double delta_angle = angle_axis.angle() * 180.0 / M_PI;
+        if (delta_angle > angle_threshold)
+            return false;
     }
-  } else{
-    if (mannul_init_flag || RTK_init_flag)
+    return true;
+}
+
+bool PlaceRecognition::refineWithICP(
+    std::pair<Eigen::Vector3d, Eigen::Matrix3d> &loop_transform,
+    const pcl::PointCloud<pcl::PointXYZI> &transform_cloud,
+    const std::pair<Eigen::Vector3d, Eigen::Matrix3d> &current_pose_)
+{
+    // 用初始 loop_transform 变换点云，发布预览
+    transformAndPublishCloud(transform_cloud, loop_transform, pubRawTransformedCloud);
+
+    // ICP 精配准
+    bool if_converged;
     {
-      is_true_loop = false;
-      mannul_init_flag = false;
-      RTK_init_flag = false;
-    } 
-  }
-  
-  std::cout  << "is_true_loop: " << is_true_loop << std::endl;
-  all_count++;
-  if(is_true_loop)
-  {
-    // std::pair<Eigen::Vector3d, Eigen::Matrix3d> RTK1_to_RTK2; 
-    // RTK1_to_RTK2.second = loop_transform.second * loop_transform_raw.second.transpose();
-    // RTK1_to_RTK2.first = loop_transform.first - RTK1_to_RTK2.second * loop_transform_raw.first;
-    // std::cout << "222222222222222222222222222222R_RTK1_to_RTK2: " << RTK1_to_RTK2.second << std::endl;
-    // std::cout << "222222222222222222222222222222T_RTK1_to_RTK2: " << RTK1_to_RTK2.first.transpose() << std::endl;
-    count++;
+        std::lock_guard<std::mutex> lock_guard(ikd_match_mtx);
+        auto cloud_ptr = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>(transform_cloud);
+        if_converged = ikd_match->cloud_matching(cloud_ptr, current_pose_, loop_transform);
+        std::cout << "ICP loop transform: " << loop_transform.first.transpose() << std::endl;
+    }
+    return if_converged;
+}
+
+void PlaceRecognition::transformAndPublishCloud(
+    const pcl::PointCloud<pcl::PointXYZI> &cloud,
+    const std::pair<Eigen::Vector3d, Eigen::Matrix3d> &transform,
+    ros::Publisher &publisher,
+    float intensity)
+{
+    pcl::PointCloud<pcl::PointXYZI> transformed;
+    transformed.resize(cloud.size());
+    for (size_t i = 0; i < cloud.size(); i++) {
+        Eigen::Vector3d pv = point2vec(cloud.points[i]);
+        pv = transform.second * pv + transform.first;
+        transformed.points[i] = vec2point(pv);
+        transformed.points[i].intensity = intensity;
+    }
+    sensor_msgs::PointCloud2 pub_cloud;
+    pcl::toROSMsg(transformed, pub_cloud);
+    pub_cloud.header.frame_id = visualization_frame_id;
+    publisher.publish(pub_cloud);
+}
+
+void PlaceRecognition::publishLoopTransformAsPose(
+    const std::pair<Eigen::Vector3d, Eigen::Matrix3d> &loop_transform,
+    ros::Publisher &publisher)
+{
     std::pair<Eigen::Vector3d, Eigen::Matrix3d> pose_transform;
-    
     pose_transform.second = loop_transform.second.transpose();
-    pose_transform.first = - pose_transform.second * loop_transform.first ;
+    pose_transform.first  = -pose_transform.second * loop_transform.first;
+
     geometry_msgs::PoseStamped pose_msg;
-    pose_msg.header.stamp = ros::Time::now();
-    pose_msg.header.frame_id = "base";
+    pose_msg.header.stamp    = ros::Time::now();
+    pose_msg.header.frame_id = visualization_frame_id;
     pose_msg.pose.position.x = pose_transform.first.x();
     pose_msg.pose.position.y = pose_transform.first.y();
     pose_msg.pose.position.z = pose_transform.first.z();
@@ -354,51 +315,38 @@ void PlaceRecognition::search_and_pub_loop(std::pair<Eigen::Vector3d, Eigen::Mat
     pose_msg.pose.orientation.y = quat.y();
     pose_msg.pose.orientation.z = quat.z();
     pose_msg.pose.orientation.w = quat.w();
-    pubLoopTransform.publish(pose_msg);
+    publisher.publish(pose_msg);
+}
 
-  
-  }  
-  std::cout << "all_count: " << all_count << ", count: " << count << "rate: " << (double)count/all_count << std::endl;
-    // visuliazaion
-  
-  pcl::toROSMsg(transform_cloud, pub_cloud);
-  pub_cloud.header.frame_id = "base";
-  pubCureentCloud.publish(pub_cloud);
-  
-  pcl::PointCloud<pcl::PointXYZI> transformed_cloud;
-  transformed_cloud.resize(transform_cloud.size());
-  for (size_t i = 0; i < transform_cloud.size(); i++) {
-    Eigen::Vector3d pv = point2vec(transform_cloud.points[i]);
-    pv = loop_transform.second * pv + loop_transform.first;
-    transformed_cloud.points[i] = vec2point(pv);
-    transformed_cloud.points[i].intensity = transform_cloud.points[i].intensity;
-  }
-  if(is_true_loop)
-  {
-    // 创建带颜色的点云
-    pcl::PointCloud<pcl::PointXYZRGB> color_cloud;
-    color_cloud.width = transformed_cloud.width;
-    color_cloud.height = transformed_cloud.height;
-    color_cloud.points.resize(transformed_cloud.points.size());
-    
-    // 设置颜色（这里设为绿色：R=0, G=255, B=0）
-    for (size_t i = 0; i < transformed_cloud.points.size(); ++i) {
-        color_cloud.points[i].x = transformed_cloud.points[i].x;
-        color_cloud.points[i].y = transformed_cloud.points[i].y;
-        color_cloud.points[i].z = transformed_cloud.points[i].z;
-        color_cloud.points[i].r = 0;    // 红色分量
-        color_cloud.points[i].g = 255;  // 绿色分量
-        color_cloud.points[i].b = 0;    // 蓝色分量
+void PlaceRecognition::publishVisualizationClouds(
+    const pcl::PointCloud<pcl::PointXYZI> &transform_cloud,
+    const std::pair<Eigen::Vector3d, Eigen::Matrix3d> &loop_transform,
+    bool is_true_loop)
+{
+    sensor_msgs::PointCloud2 pub_cloud;
+
+    // 1. 发布原始点云
+    pcl::toROSMsg(transform_cloud, pub_cloud);
+    pub_cloud.header.frame_id = visualization_frame_id;
+    pubCureentCloud.publish(pub_cloud);
+
+    // 2. 用 loop_transform 变换点云
+    pcl::PointCloud<pcl::PointXYZI> transformed_cloud;
+    transformed_cloud.resize(transform_cloud.size());
+    for (size_t i = 0; i < transform_cloud.size(); i++) {
+        Eigen::Vector3d pv = point2vec(transform_cloud.points[i]);
+        pv = loop_transform.second * pv + loop_transform.first;
+        transformed_cloud.points[i] = vec2point(pv);
+        transformed_cloud.points[i].intensity = transform_cloud.points[i].intensity;
     }
-    
-    pcl::toROSMsg(color_cloud, pub_cloud);
-    pub_cloud.header.frame_id = "base";
-    pubTransformedCloud.publish(pub_cloud);
-    slow_loop.sleep();
-  }else{
-    // 同上，可设置不同颜色（这里设为红色）
+
+    // 3. 着色并发布（成功=绿色，失败=红色）
+    uint8_t r = is_true_loop ? 0   : 255;
+    uint8_t g = is_true_loop ? 255 : 0;
+    uint8_t b = 0;
+
     pcl::PointCloud<pcl::PointXYZRGB> color_cloud;
-    color_cloud.width = transformed_cloud.width;
+    color_cloud.width  = transformed_cloud.width;
     color_cloud.height = transformed_cloud.height;
     color_cloud.is_dense = transformed_cloud.is_dense;
     color_cloud.points.resize(transformed_cloud.points.size());
@@ -406,17 +354,75 @@ void PlaceRecognition::search_and_pub_loop(std::pair<Eigen::Vector3d, Eigen::Mat
         color_cloud.points[i].x = transformed_cloud.points[i].x;
         color_cloud.points[i].y = transformed_cloud.points[i].y;
         color_cloud.points[i].z = transformed_cloud.points[i].z;
-        color_cloud.points[i].r = 255;  // 红色
-        color_cloud.points[i].g = 0;
-        color_cloud.points[i].b = 0;
+        color_cloud.points[i].r = r;
+        color_cloud.points[i].g = g;
+        color_cloud.points[i].b = b;
     }
     pcl::toROSMsg(color_cloud, pub_cloud);
-    pub_cloud.header.frame_id = "base";
+    pub_cloud.header.frame_id = visualization_frame_id;
     pubTransformedCloud.publish(pub_cloud);
-    slow_loop.sleep();
+}
+
+void PlaceRecognition::search_and_pub_loop(std::pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform, 
+  pcl::PointCloud<pcl::PointXYZI> transform_cloud, std::pair<Eigen::Vector3d, Eigen::Matrix3d> current_pose_,
+  std::vector<bool> options){
+ // std::cout << "current_cloud size3: " << transform_cloud.size() << std::endl;
+
+  // 解析开关（不足的位默认 true）
+  options.resize(LOOP_OPTION_COUNT, true);
+  bool enable_icp_refine    = options[OPT_ICP_REFINE];
+  bool enable_sliding_window = options[OPT_SLIDING_WINDOW];
+  bool enable_visualize      = options[OPT_VISUALIZE];
+
+  std::mutex mtx;
+  std::unique_lock<std::mutex> lock(mtx);
+  
+  // ── 1. ICP 精匹配（可选） ─────────────────────────────────────────────
+  bool if_converged;
+  if (enable_icp_refine)
+  {
+    if_converged = refineWithICP(loop_transform, transform_cloud, current_pose_);
   }
-   //auto t_query_end = std::chrono::high_resolution_clock::now();
-   //querying_time.push_back(time_inc(t_query_end, t_query_begin));
+  else
+  {
+    // 跳过 ICP，直接视为收敛
+    if_converged = true;
+  }
+
+  // ── 2. 判定是否为有效匹配 ─────────────────────────────────────────────
+  bool is_true_loop = false;
+  if(if_converged)
+  {
+    if (enable_sliding_window)
+    {
+      is_true_loop = checkSlidingWindowConsistency(loop_transform);
+    }
+    else
+    {
+      is_true_loop = true;
+    }
+  }
+  
+  std::cout  << "is_true_loop: " << is_true_loop << std::endl;
+  all_count++;
+  
+  // ── 3. 发布匹配结果 ───────────────────────────────────────────────────
+  if(is_true_loop)
+  {
+    count++;
+    publishLoopTransformAsPose(loop_transform, pubLoopTransform);
+    
+    // 更新上次匹配成功时的变换
+    last_loop_transform = loop_transform;
+  }
+  
+  std::cout << "all_count: " << all_count << ", count: " << count << "rate: " << (double)count/all_count << std::endl;
+
+  // ── 4. 可视化（可选） ─────────────────────────────────────────────────
+  if (enable_visualize)
+  {
+    publishVisualizationClouds(transform_cloud, loop_transform, is_true_loop);
+  }
 }
 
 
@@ -451,53 +457,87 @@ void PlaceRecognition::loadstateCallback(const sensor_msgs::PointCloud2::ConstPt
     
     sensor_msgs::PointCloud2 pub_cloud;
     pcl::toROSMsg(current_cloud, pub_cloud);
-    pub_cloud.header.frame_id = "base";
+    pub_cloud.header.frame_id = visualization_frame_id;
     pubCurrentCloud.publish(pub_cloud);
-    std::cout << "current_cloud size1: " << current_cloud.size() << std::endl;
+   // std::cout << "current_cloud size1: " << current_cloud.size() << std::endl;
+
+
+    // std::pair<Eigen::Vector3d, Eigen::Matrix3d> map_localization_pose;
+    // map_localization_pose.second = last_loop_transform.second * current_pose.second;
+    // map_localization_pose.first =  last_loop_transform.second * current_pose.first + last_loop_transform.first;
+  
+    // // 发布地图定位位置
+    // geometry_msgs::PoseStamped map_loc_msg;
+    // map_loc_msg.header.stamp = ros::Time::now();
+    // map_loc_msg.header.frame_id = visualization_frame_id;
+    // map_loc_msg.pose.position.x = map_localization_pose.first.x();
+    // map_loc_msg.pose.position.y = map_localization_pose.first.y();
+    // map_loc_msg.pose.position.z = map_localization_pose.first.z();
+    // Eigen::Quaterniond map_quat(map_localization_pose.second);
+    // map_loc_msg.pose.orientation.x = map_quat.x();
+    // map_loc_msg.pose.orientation.y = map_quat.y();
+    // map_loc_msg.pose.orientation.z = map_quat.z();
+    // map_loc_msg.pose.orientation.w = map_quat.w();
+    // pubMapLocalization.publish(map_loc_msg);
+
     return;
+}
+
+bool PlaceRecognition::estimateZFromMap(Eigen::Vector3d &position, double side_length) const
+{
+    double half = side_length / 2.0;
+    double min_x = position.x() - half, max_x = position.x() + half;
+    double min_y = position.y() - half, max_y = position.y() + half;
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr area_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+    for (const auto &pt : whole_cloud)
+    {
+        if (pt.x >= min_x && pt.x <= max_x &&
+            pt.y >= min_y && pt.y <= max_y)
+            area_cloud->push_back(pt);
+    }
+    if (area_cloud->empty())
+    {
+        std::cout << "estimateZFromMap: No points found in the specified area." << std::endl;
+        return false;
+    }
+
+    double sum_z = 0.0;
+    for (const auto &pt : *area_cloud) sum_z += pt.z;
+    position.z() = sum_z / area_cloud->size();
+    return true;
+}
+
+std::pair<Eigen::Vector3d, Eigen::Matrix3d> PlaceRecognition::computeInitTransform(
+    const std::pair<Eigen::Vector3d, Eigen::Matrix3d> &init_pose) const
+{
+    std::pair<Eigen::Vector3d, Eigen::Matrix3d> init_tf;
+    init_tf.second = init_pose.second * current_pose.second.transpose();
+    init_tf.first  = init_pose.first  - init_tf.second * current_pose.first;
+    return init_tf;
 }
 
 void PlaceRecognition::initialPoseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
 {
+    if (!manual_loop_enable) {
+        ROS_WARN("Manual loop is disabled, ignoring /initialpose");
+        return;
+    }
+
     ROS_INFO("Received initial pose estimate:");
     static float past_z = 0.0;
     auto position = msg->pose.pose.position;
 
-    float side_length = 1.0f;
-    float half_side = side_length / 2.0f;
-    float min_x = position.x - half_side;
-    float max_x = position.x + half_side;
-    float min_y = position.y - half_side;
-    float max_y = position.y + half_side;
-
-    // 筛选区域内的点
-    pcl::PointCloud<pcl::PointXYZI>::Ptr area_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    
-    for (const auto& point : whole_cloud) {
-        if (point.x >= min_x && point.x <= max_x &&
-            point.y >= min_y && point.y <= max_y) {
-            area_cloud->push_back(point);
-        }
-    } 
-    // 检查区域内是否有足够多的点
-    if (area_cloud->empty()) {
-      std::cout << "No points found in the specified area." << std::endl;
-      //for test only
-      //return;
-      position.z = past_z;
-      ROS_INFO("  Position: x=%.3f, y=%.3f, z=%.3f", 
-                position.x, position.y, position.z);
-    }else{
- // 计算平均Z值
-        float sum_z = 0.0f;
-        for (const auto& point : *area_cloud) {
-          sum_z += point.z;
-        }
-        float average_z = sum_z / area_cloud->size();
-
-        position.z = average_z;
+    // 使用公共函数从地图估算 Z 值
+    Eigen::Vector3d pos_eigen(position.x, position.y, 0.0);
+    if (estimateZFromMap(pos_eigen, 1.0)) {
+        position.z = pos_eigen.z();
         past_z = position.z;
         ROS_INFO("  Position: x=%.3f, y=%.3f, z=%.3f", 
+                  position.x, position.y, position.z);
+    } else {
+        position.z = past_z;
+        ROS_INFO("  Position (fallback z): x=%.3f, y=%.3f, z=%.3f", 
                   position.x, position.y, position.z);
     }
 
@@ -510,341 +550,9 @@ void PlaceRecognition::initialPoseCallback(const geometry_msgs::PoseWithCovarian
    std::pair<Eigen::Vector3d, Eigen::Matrix3d> init_pose;
    init_pose.first = Eigen::Vector3d(position.x, position.y, position.z);
    init_pose.second = Eigen::Quaterniond(orientation.w, orientation.x, orientation.y, orientation.z).toRotationMatrix();
-   mannul_init_flag = true;
-   std::pair<Eigen::Vector3d, Eigen::Matrix3d> init_tranform;
-   init_tranform.first = init_pose.first - init_pose.second * current_pose.second.transpose() * current_pose.first;
-   init_tranform.second = init_pose.second * current_pose.second.transpose();
-    search_and_pub_loop(init_tranform, current_cloud, current_pose);
+   auto init_tranform = computeInitTransform(init_pose);
+   search_and_pub_loop(init_tranform, current_cloud, current_pose, manual_loop_options);
    
-}
-// header: 
-//   seq: 2961
-//   stamp: 
-//     secs: 1757708843
-//     nsecs: 663201093
-//   frame_id: "navsat_link"
-// status: 
-//   status: 0
-//   service: 0
-// latitude: 30.2640231824
-// longitude: 120.29553101983
-// altitude: 8.2441
-// position_covariance: [9.025e-05, 0.0, 0.0, 0.0, 8.099999999999999e-05, 0.0, 0.0, 0.0, 0.00054756]
-// position_covariance_type: 2
-
-// header: 
-//   seq: 29933
-//   stamp: 
-//     secs: 1757708856
-//     nsecs:  62826156
-//   frame_id: "euler_link"
-// vector: 
-//   x: -6.108652381980153e-05
-//   y: 0.04188092073085593
-//   z: 0.9040945151670787
-double normalizeAngle(double angle) {
-  while (angle > M_PI) angle -= 2.0 * M_PI;
-  while (angle < -M_PI) angle += 2.0 * M_PI;
-  return angle;
-}
-/**
- * @brief 将欧拉角转换为旋转矩阵
- * 
- * @param euler_angles 欧拉角向量 (roll, pitch, yaw) 单位弧度
- * @param order 旋转顺序，默认为ZYX（yaw-pitch-roll）
- * @return Eigen::Matrix3d 对应的旋转矩阵
- */
-Eigen::Matrix3d PlaceRecognition::getRotationMatrixFromEuler(
-    const Eigen::Vector3d& euler_angles, 
-    const std::string& order)
-{
-    double roll = normalizeAngle(euler_angles.y());
-    double pitch = normalizeAngle(euler_angles.x());
-    double yaw = normalizeAngle(90*M_PI/180 - euler_angles.z());
-    
-    Eigen::Matrix3d R;
-    
-    if (order == "ZYX") {
-        // 常用顺序：yaw (Z) -> pitch (Y) -> roll (X)
-        double cy = cos(yaw);
-        double sy = sin(yaw);
-        double cp = cos(pitch);
-        double sp = sin(pitch);
-        double cr = cos(roll);
-        double sr = sin(roll);
-        
-        R << cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr,
-             sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr,
-             -sp,   cp*sr,           cp*cr;
-             
-    } else if (order == "XYZ") {
-        // 顺序：roll (X) -> pitch (Y) -> yaw (Z)
-        double cr = cos(roll);
-        double sr = sin(roll);
-        double cp = cos(pitch);
-        double sp = sin(pitch);
-        double cy = cos(yaw);
-        double sy = sin(yaw);
-        
-        R << cp*cy, -cr*sy + sr*sp*cy, sr*sy + cr*sp*cy,
-             cp*sy, cr*cy + sr*sp*sy, -sr*cy + cr*sp*sy,
-             -sp,   sr*cp,            cr*cp;
-             
-    } else if (order == "ZXY") {
-        // 顺序：yaw (Z) -> roll (X) -> pitch (Y)
-        double cy = cos(yaw);
-        double sy = sin(yaw);
-        double cr = cos(roll);
-        double sr = sin(roll);
-        double cp = cos(pitch);
-        double sp = sin(pitch);
-        
-        R << cy*cr - sy*sr*sp, -sy*cp, cy*sr + sy*cr*sp,
-             sy*cr + cy*sr*sp, cy*cp,  sy*sr - cy*cr*sp,
-             -cp*sr,           sp,     cp*cr;
-             
-    } else {
-        ROS_ERROR("Unsupported rotation order: %s. Using identity matrix.", order.c_str());
-        R = Eigen::Matrix3d::Identity();
-    }
-    
-    return R;
-}
-Eigen::Matrix3d PlaceRecognition::getRotationMatrixFromYaw(double yaw_angle_radians) {
-  Eigen::Matrix3d rotation_matrix;
-  
-  double cos_yaw = std::cos(yaw_angle_radians);
-  double sin_yaw = std::sin(yaw_angle_radians);
-  
-  // 绕Z轴的旋转矩阵
-  rotation_matrix << cos_yaw, -sin_yaw, 0,
-                     sin_yaw,  cos_yaw, 0,
-                     0,        0,       1;
-  
-  return rotation_matrix;
-}
-void PlaceRecognition::RTKPoseCallback(
-    const geometry_msgs::Vector3Stamped::ConstPtr& euler_msg,
-    const sensor_msgs::NavSatFix::ConstPtr& fix_msg)
-{
-
-    ROS_INFO("Received RTK initial pose estimate:");
-    double start_time = ros::Time::now().toSec();
-
-    
-    const auto& covariance = fix_msg->position_covariance;
-    if(covariance[0] > 0.0005 || covariance[4] > 0.00054756)
-    {
-      ROS_ERROR("RTK covariance is too high, skip this pose");
-      return;
-
-    }
-    Eigen::Vector3d euler_angle(euler_msg->vector.x, euler_msg->vector.y, euler_msg->vector.z);
-    //
-    //Eigen::Matrix3d rotation_matrix = getRotationMatrixFromYaw(-euler_angle.z+90*M_PI/180);
-    Eigen::Matrix3d rotation_matrix = getRotationMatrixFromEuler(euler_angle, "ZYX");
-     //经纬度转UTM
-    double utm_x, utm_y;
-
-    latitude = fix_msg->latitude;
-    longitude = fix_msg->longitude;
-    altitude = fix_msg->altitude;
-    
-    GeographicLib::UTMUPS::Forward(latitude, longitude, zone, northp, utm_x, utm_y);
-
-    Eigen::Vector3d position(utm_x, utm_y, 0.0);
-    position.x() = position.x() - utm_x_0;
-    position.y() = position.y() - utm_y_0;
-    std::cout<<"position:" << position.transpose()<< std::endl;
-    //经纬度转ENU
-    // double local_E, local_N, local_U;
-    // geo_converter.Forward(latitude, longitude, altitude, local_E, local_N, local_U);
-    // std::cout << "local_E: " << local_E << ", local_N: " << local_N << ", local_U: " << local_U << std::endl;
-    // Eigen::Vector3d position(local_E, local_N, local_U);
-    position = position + RTK_imu_trans - rotation_matrix.inverse() * RTK_imu_trans;
-
-    //get z from the global input map
-    double side_length = 1.0;
-    double half_side = side_length / 2.0;
-    
-    // 修复坐标访问方式
-    double min_x = position.x() - half_side;
-    double max_x = position.x() + half_side;
-    double min_y = position.y() - half_side;
-    double max_y = position.y() + half_side;
-
-    // 筛选区域内的点
-    pcl::PointCloud<pcl::PointXYZI>::Ptr area_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-    
-    for (const auto& point : whole_cloud) {
-        if (point.x >= min_x && point.x <= max_x &&
-            point.y >= min_y && point.y <= max_y) {
-            area_cloud->push_back(point);
-        }
-    } 
-    // 检查区域内是否有足够多的点
-    if (area_cloud->empty()) {
-      std::cout << "No points found in the specified area." << std::endl;
-      return;
-    }
-
-    // 计算平均Z值
-    double sum_z = 0.0;
-    for (const auto& point : *area_cloud) {
-      sum_z += point.z;
-    }
-    double average_z = sum_z / area_cloud->size();
-
-    position.z() = average_z;
-    // ROS_INFO("  Position: x=%.3, y=%.3f, z=%.3f", 
-    //          position.x(), position.y(), position.z());
-    
-
-   
-   std::pair<Eigen::Vector3d, Eigen::Matrix3d> init_pose;
-   init_pose.first = Eigen::Vector3d(position.x(), position.y(), position.z());
-   init_pose.second = rotation_matrix;
-   RTK_init_flag = true;
-
-   std::pair<Eigen::Vector3d, Eigen::Matrix3d> init_tranform;
-   init_tranform.second = init_pose.second * current_pose.second.transpose();
-   init_tranform.first = init_pose.first - init_pose.second * current_pose.second.transpose() * current_pose.first;
-   Eigen::Quaterniond quat(init_pose.second);
-   nav_msgs::Odometry pose_msg;
-   pose_msg.pose.pose.position.x = init_pose.first.x();
-   pose_msg.pose.pose.position.y = init_pose.first.y();
-   pose_msg.pose.pose.position.z = init_pose.first.z();
-   pose_msg.pose.pose.orientation.x = quat.x();
-   pose_msg.pose.pose.orientation.y = quat.y();
-   pose_msg.pose.pose.orientation.z = quat.z();
-   pose_msg.pose.pose.orientation.w = quat.w();
-   pose_msg.header.frame_id = "base";
-   pose_msg.header.stamp = ros::Time::now();
-   pubMatchedPose.publish(pose_msg);
-
-   std::cout<<"RTK init_tranform: "<<init_tranform.first.transpose()<<std::endl;
-   std::cout<<"RTK init_tranform: "<<init_tranform.second<<std::endl;
-   
-   std::cout << "current_cloud size2: " << current_cloud.size() << std::endl;
-
-   double lidar_point_time = ros::Time::now().toSec();
-    std::cout << "lidar_point_time: " << lidar_point_time - start_time << std::endl;
-   search_and_pub_loop(init_tranform, current_cloud, current_pose);
-
-   double end_time = ros::Time::now().toSec();
-   std::cout << "matching time: " << end_time - start_time << std::endl;
-   
-}
-
-void PlaceRecognition::RTKPoseCallback(
-  const sensor_msgs::NavSatFix::ConstPtr& fix_msg)
-{
-
-  ROS_INFO("Received RTK initial pose estimate:");
-  double start_time = ros::Time::now().toSec();
-
-  
-  const auto& covariance = fix_msg->position_covariance;
-  if(covariance[0] > 0.0005 || covariance[4] > 0.00054756)
-  {
-    ROS_ERROR("RTK covariance is too high, skip this pose");
-    return;
-
-  }
- 
- 
-  //altitude = 0.0;
-  
-  //经纬度转UTM
-  double utm_x, utm_y;
-
-  latitude = fix_msg->latitude;
-  longitude = fix_msg->longitude;
-  altitude = fix_msg->altitude;
-  
-  GeographicLib::UTMUPS::Forward(latitude, longitude, zone, northp, utm_x, utm_y);
-
-  Eigen::Vector3d position(utm_x, utm_y, 0.0);
-  position.x() = position.x() - utm_x_0;
-  position.y() = position.y() - utm_y_0;
-  std::cout<<"position:" << position.transpose()<< std::endl;
- 
-  // double local_E, local_N, local_U;
-  // geo_converter.Forward(latitude, longitude, altitude, local_E, local_N, local_U);
-  
-  //std::cout << "local_E: " << local_E << ", local_N: " << local_N << ", local_U: " << local_U << std::endl;
-  //Eigen::Vector3d position(local_E, local_N, local_U);
-  //position = position + RTK_imu_trans - rotation_matrix.inverse() * RTK_imu_trans;
-
-  //get z from the global input map
-  double side_length = 1.0;
-  double half_side = side_length / 2.0;
-  
-  // 修复坐标访问方式
-  double min_x = position.x() - half_side;
-  double max_x = position.x() + half_side;
-  double min_y = position.y() - half_side;
-  double max_y = position.y() + half_side;
-
-  // 筛选区域内的点
-  pcl::PointCloud<pcl::PointXYZI>::Ptr area_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-  
-  for (const auto& point : whole_cloud) {
-      if (point.x >= min_x && point.x <= max_x &&
-          point.y >= min_y && point.y <= max_y) {
-          area_cloud->push_back(point);
-      }
-  } 
-  // 检查区域内是否有足够多的点
-  if (area_cloud->empty()) {
-    std::cout << "No points found in the specified area." << std::endl;
-    return;
-  }
-
-  // 计算平均Z值
-  double sum_z = 0.0;
-  for (const auto& point : *area_cloud) {
-    sum_z += point.z;
-  }
-  double average_z = sum_z / area_cloud->size();
-
-  position.z() = average_z;
-  std::cout<<"position:" << position.transpose()<< std::endl;
-  
-
- 
-  std::pair<Eigen::Vector3d, Eigen::Matrix3d> init_pose;
-  init_pose.first = Eigen::Vector3d(position.x(), position.y(), position.z());
-  init_pose.second = Eigen::Matrix3d::Identity();
-  RTK_init_flag = true;
-  std::pair<Eigen::Vector3d, Eigen::Matrix3d> init_tranform;
-  init_tranform.second = init_pose.second * current_pose.second.transpose();
-  init_tranform.first = init_pose.first - init_pose.second * current_pose.second.transpose() * current_pose.first;
-  Eigen::Quaterniond quat(init_pose.second);
-  nav_msgs::Odometry pose_msg;
-  pose_msg.pose.pose.position.x = init_pose.first.x();
-  pose_msg.pose.pose.position.y = init_pose.first.y();
-  pose_msg.pose.pose.position.z = init_pose.first.z();
-  pose_msg.pose.pose.orientation.x = quat.x();
-  pose_msg.pose.pose.orientation.y = quat.y();
-  pose_msg.pose.pose.orientation.z = quat.z();
-  pose_msg.pose.pose.orientation.w = quat.w();
-  pose_msg.header.frame_id = "base";
-  pose_msg.header.stamp = ros::Time::now();
-  pubMatchedPose.publish(pose_msg);
-
-  std::cout<<"RTK init_tranform: "<<init_tranform.first.transpose()<<std::endl;
-  std::cout<<"RTK init_tranform: "<<init_tranform.second<<std::endl;
-  
-  std::cout << "current_cloud size2: " << current_cloud.size() << std::endl;
-
-  double lidar_point_time = ros::Time::now().toSec();
-    std::cout << "lidar_point_time: " << lidar_point_time - start_time << std::endl;
-  search_and_pub_loop(init_tranform, current_cloud, current_pose);
-
-  double end_time = ros::Time::now().toSec();
-  std::cout << "matching time: " << end_time - start_time << std::endl;
- 
 }
 
 void PlaceRecognition::load_global_pcd()
@@ -863,6 +571,7 @@ void PlaceRecognition::load_global_pcd()
   
   std::cout << "cloud size: " << cloud->size() << std::endl;
   whole_cloud.resize(cloud->size());
+  double x_all;
   for(int i = 0; i < cloud->size(); i++)
   {
     auto &pt = whole_cloud.points[i];
@@ -870,8 +579,9 @@ void PlaceRecognition::load_global_pcd()
     pt.y = cloud->points[i].y;
     pt.z = cloud->points[i].z;
     pt.intensity = 100;
+    x_all += pt.x; 
   }
-  
+  std::cout<<"x_average"<< x_all/whole_cloud.size()<<std::endl;
   std::cout << "whole_cloud size: " << whole_cloud.size() << std::endl;
 
 //检查全局坐标系
@@ -896,7 +606,7 @@ void PlaceRecognition::load_global_pcd()
   
   sensor_msgs::PointCloud2 pub_cloud;
   pcl::toROSMsg(whole_cloud, pub_cloud);
-  pub_cloud.header.frame_id = "base";
+  pub_cloud.header.frame_id = visualization_frame_id;
   
   pub_cloud.header.seq = 0;
  // pub_cloud.header.stamp = ros::Time(0);
@@ -905,14 +615,15 @@ void PlaceRecognition::load_global_pcd()
   pubWholeCloud.publish(pub_cloud);
   ikd_match->cloud_matching_init(full_pcd_dir);
 }
+
 int main(int argc, char **argv) {
   ros::init(argc, argv, "place_recognition_node");
   ros::NodeHandle nh;
   PlaceRecognition place_recog(nh);
   place_recog.load_global_pcd();
-  while(ros::ok())
-  {
-    ros::spinOnce();
-  } 
+  
+  // 使用 ros::spin() 代替无延迟的循环，避免CPU 100%占用
+  ros::spin();
+  
   return 0;
 }

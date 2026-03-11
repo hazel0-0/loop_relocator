@@ -1,7 +1,14 @@
+# 可视化消息的 frame_id（所有可视化话题统一使用此 frame_id）
+visualization_frame_id: "base"
+
 lidar_imu_trans:
-  x: 0.367
-  y: 0.0475
-  z: 0.065
+  # x: 0.367
+  # y: 0.0475
+  # z: 0.065
+
+  x: 0.36
+  y: 0.0
+  z: 0.150
   # x:  0.013
   # y: -0.0475
   # z: -0.065
@@ -12,8 +19,52 @@ RTK_imu_trans:
   x: 0.39
   y: 0.0
   z: 0.0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  三种 Loop 定位源的开关与 options 配置
+#  每种源有：
+#    enable        : 是否启用该定位源
+#    icp_refine    : 是否做 ICP 精匹配
+#    sliding_window: 是否用滑动窗口一致性检查
+#    visualize     : 是否发布可视化点云
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 手动初始化（RViz 2D Pose Estimate / /initialpose）
+manual_loop:
+  enable: true
+  icp_refine: true
+  sliding_window: false
+  visualize: true
+
+# RTK 定位源
+rtk_loop:
+  enable: true
+  icp_refine: true
+  sliding_window: true
+  visualize: true
+
+# QR 码定位源
+qr_loop:
+  enable: true
+  icp_refine: false
+  sliding_window: false
+  visualize: true
+  # 测试模式: 不做重定位, 而是利用当前机器人位姿反推二维码的世界坐标并可视化
+  # 用于在没有预先测量二维码绝对位置时标定二维码位置
+  test_mode: true
+
+#outdoor3:
 latitude: 30.2643729107
 longitude: 120.2964856003
+
+#outdoor4:
+# latitude: 30.2639090367
+# longitude: 120.2952664103
+
+#outside1:
+#latitude: 29.9754018667
+#longitude: 120.1188110318
+
 altitude: 0.0
 geocentric_x: 239883.936240
 geocentric_y: 3351122.307560

@@ -1,0 +1,108 @@
+# QR Code and Charging Dock Target Coordinates
+# Coordinate frame: ENU (East-North-Up / 东北天)
+# Units: meters
+#
+# target_1: QR code #1 (wall-mounted), corners 1-1 to 1-4
+# target_2: QR code #2 (wall-mounted), corners 2-1 to 2-4
+# target_3: Charging dock (ground), corners 3-1 to 3-4
+
+targets:
+  - name: "qr_code_1"
+    description: "First QR code - four corners"
+    aruco_ids: [1, 3]  # front and back ArUco marker IDs
+    corners:
+      - id: "1-1"
+        east:   -0.4550
+        north:   3.6629
+        up:     -0.4599
+      - id: "1-2"
+        east:   -0.2565
+        north:   3.6479
+        up:     -0.4530
+      - id: "1-3"
+        east:   -0.4496
+        north:   3.6534
+        up:     -0.6593
+      - id: "1-4"
+        east:   -0.2504
+        north:   3.6395
+        up:     -0.6526
+
+  - name: "qr_code_2"
+    description: "Second QR code - four corners"
+    aruco_ids: [0, 2]  # front and back ArUco marker IDs
+    corners:
+      - id: "2-1"
+        east:    0.7527
+        north:  23.6644
+        up:     -0.8263
+      - id: "2-2"
+        east:    0.9505
+        north:  23.6536
+        up:     -0.8318
+      - id: "2-3"
+        east:    0.7465
+        north:  23.6670
+        up:     -1.0262
+      - id: "2-4"
+        east:    0.9454
+        north:  23.6524
+        up:     -1.0312
+
+  - name: "charging_dock"
+    description: "Ground-mounted charging dock - four corners"
+    corners:
+      - id: "3-1"
+        east:   -6.5239
+        north:  -1.5596
+        up:     -1.4491
+      - id: "3-2"
+        east:   -6.5035
+        north:  -1.2428
+        up:     -1.4546
+      - id: "3-3"
+        east:   -6.1290
+        north:  -1.5843
+        up:     -1.4462
+      - id: "3-4"
+        east:   -6.1061
+        north:  -1.2695
+        up:     -1.4515
+
+# ── Filter parameters ──────────────────────────────────────────────────────
+# Expected height difference between camera and marker centre in world Z (meters).
+# If |computed_diff - expected_diff| > height_diff_tolerance, the result is rejected.
+camera_marker_height_diff: -0.5    # camera is ~0.80m above the marker centre
+height_diff_tolerance: 0.10        # reject if error exceeds 10cm
+
+# ── Camera-to-Robot extrinsics ─────────────────────────────────────────────
+# T_robot_camera: pose of the camera in the robot body frame.
+# Robot body frame: X = forward, Y = left, Z = up
+# Camera optical frame (RealSense): X = right, Y = down, Z = forward
+#
+# Translation: camera position in robot body frame [x, y, z] (meters)
+# Rotation: given as a 3×3 rotation matrix (row-major), mapping camera-optical → robot-body
+#   robot_X(fwd) = cam_Z(fwd)   → row0 = [0, 0, 1]
+#   robot_Y(left) = -cam_X(right) → row1 = [-1, 0, 0]
+#   robot_Z(up)  = -cam_Y(down) → row2 = [0, -1, 0]
+camera_to_robot:
+  translation: [0.382537, -0.026221, 0.19649]
+  # -0.022537,0.026221,-0.046491
+  rotation:
+    - [0,  0, 1]
+    - [-1, 0, 0]
+    - [0, -1, 0]
+  # 二维码到反光柱的外参：
+  qr_to_column:
+    translation: [0.0, 0.0, 0.0]
+    rotation:
+      - [0,  0, 1]
+      - [-1, 0, 0]
+      - [0, -1, 0]
+  # 二维码到两个反光柱的外参：
+  qr_to_columns:
+    translation: [0.0, 0.0, 0.0]
+    rotation:
+      - [0,  0, 1]
+      - [-1, 0, 0]
+      - [0, -1, 0]
